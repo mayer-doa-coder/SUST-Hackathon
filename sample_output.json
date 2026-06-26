@@ -5,15 +5,17 @@
   "case_type": "wrong_transfer",
   "severity": "high",
   "department": "dispute_resolution",
-  "agent_summary": "Customer likely refers to transaction TXN-9101. Evidence verdict is consistent for a wrong-transfer complaint.",
-  "recommended_next_action": "Review transaction TXN-9101 and follow the wrong-transfer dispute workflow.",
-  "customer_reply": "We have noted your concern regarding TXN-9101. Our team will review the case and update you through official support channels. Please do not share your PIN or OTP with anyone.",
+  "agent_summary": "Customer reports sending 5000 BDT via TXN-9101 to +8801719876543, which they now believe was the wrong recipient. Recipient is unresponsive.",
+  "recommended_next_action": "Verify TXN-9101 details with the customer and initiate the wrong-transfer dispute workflow per policy.",
+  "customer_reply": "We have noted your concern about transaction TXN-9101. Please do not share your PIN or OTP with anyone. Our dispute team will review the case and contact you through official support channels.",
   "human_review_required": true,
-  "confidence": 1.0,
+  "confidence": 0.9,
   "reason_codes": [
+    "wrong_transfer",
     "transaction_match",
     "amount_exact",
     "time_close",
-    "type_match"
+    "type_match",
+    "dispute_initiated"
   ]
 }
