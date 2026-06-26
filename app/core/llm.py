@@ -58,9 +58,14 @@ class AnthropicNLGClient:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        lang_instruction = {
+            "bn": "Write customer_reply in Bengali (Bangla script). Write agent_summary and recommended_next_action in English.",
+            "mixed": "Write customer_reply in Banglish (Bengali words in Latin script mixed with English). Write agent_summary and recommended_next_action in English.",
+        }.get(facts.language, "Write all three fields in English.")
         prompt = (
             "You are QueueStorm Investigator's NLG layer. You must produce JSON with exactly these keys: "
             "agent_summary, recommended_next_action, customer_reply. "
+            f"{lang_instruction} "
             "Never request PIN, OTP, password, or card number. "
             "Never promise refunds, reversals, account unblocks, or recovery. "
             "Use the investigation facts as ground truth. "

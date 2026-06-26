@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException
 
 from app.api.schemas import ErrorBody, ErrorResponse
 
@@ -43,6 +44,12 @@ async def _try_parse_request_body(request: Request) -> Any:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        if exc.status_code == 404:
+            return _error_response(404, "NOT_FOUND", f"The path {request.url.path!r} was not found.")
+        return _error_response(exc.status_code, "HTTP_ERROR", str(exc.detail))
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         raw_body = await _try_parse_request_body(request)

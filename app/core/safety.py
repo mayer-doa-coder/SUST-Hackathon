@@ -12,6 +12,8 @@ PROMISE_PATTERN = re.compile(
 )
 THIRD_PARTY_PATTERN = re.compile(r"(?:\+?\d[\d\s-]{7,}\d)")
 INJECTION_ECHO_PATTERN = re.compile(r"(ignore all rules|developer mode|system prompt|confirm my refund)", re.IGNORECASE)
+# Matches affirmative requests to share credentials — excludes negations like "do not share your PIN"
+NEGATION_BEFORE_SHARE = re.compile(r"\b(?:do\s+not|don'?t|never|please\s+do\s+not)\s+share\b", re.IGNORECASE)
 
 
 def safe_customer_reply(ticket_id: str, language: Language, user_type: UserType) -> str:
@@ -55,7 +57,7 @@ def enforce_customer_reply_safety(
     if THIRD_PARTY_PATTERN.search(normalized) and "official" not in normalized.lower():
         return safe_customer_reply(ticket_id, language, user_type), True
 
-    if "share your" in normalized.lower() and CREDENTIAL_PATTERN.search(normalized):
+    if "share your" in normalized.lower() and CREDENTIAL_PATTERN.search(normalized) and not NEGATION_BEFORE_SHARE.search(normalized):
         return safe_customer_reply(ticket_id, language, user_type), True
 
     return normalized, False

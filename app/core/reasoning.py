@@ -183,7 +183,8 @@ def _requires_human_review(
     if ambiguous_match and case_type not in {CaseType.OTHER, CaseType.WRONG_TRANSFER}:
         return True
     if matched_transaction is not None:
-        if matched_transaction.status == TransactionStatus.PENDING and case_type in FINANCIAL_CASE_TYPES:
+        pending_review_types = FINANCIAL_CASE_TYPES - {CaseType.MERCHANT_SETTLEMENT_DELAY}
+        if matched_transaction.status == TransactionStatus.PENDING and case_type in pending_review_types:
             return True
         if matched_transaction.amount >= 10000 and case_type not in {CaseType.MERCHANT_SETTLEMENT_DELAY, CaseType.REFUND_REQUEST}:
             return True
