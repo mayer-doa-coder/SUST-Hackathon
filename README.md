@@ -189,7 +189,7 @@ Async Path (non-blocking):
 | **Python Runtime** | Python 3.13 | Type hints, async/await, performance |
 | **Validation** | Pydantic 2.8+ | Input/output schema enforcement |
 | **Web Server** | Uvicorn 0.30+ | ASGI server, production-ready |
-| **AI/LLM** | Anthropic Claude 3.5 Sonnet | Natural language generation, fallback templates |
+| **AI/LLM** | gemini-2.5-flash | Natural language generation, fallback templates |
 | **HTTP Client** | HTTPX 0.27+ | Async HTTP calls to external APIs |
 | **Testing** | Pytest 8.2+ | Unit/integration test framework |
 | **Deployment** | Docker / Docker Compose | Containerization, local multi-service setup |
@@ -303,27 +303,22 @@ pip install -r requirements.txt
 Create a `.env` file:
 
 ```env
-# Application
+APP_ENV=development
 APP_VERSION=1.0.0
-API_HOST=0.0.0.0
-API_PORT=8000
-API_RELOAD=true
-
-# LLM Configuration
-LLM_PROVIDER=anthropic
-LLM_API_KEY=sk-ant-XXXXX
-LLM_MODEL=claude-3-5-sonnet-20241022
-LLM_MAX_COMPLAINT_CHARS=2000
-LLM_TIMEOUT_SECONDS=10
-
-# Authentication (optional)
-AUTH_ENABLED=false
-AUTH_JWT_SECRET=your-super-secret-key-change-this
-
-# Rate Limiting (optional)
-RATE_LIMIT_ENABLED=true
-RATE_LIMIT_REQUESTS=100
-RATE_LIMIT_WINDOW_SECONDS=60
+PORT=8000
+EVIDENCE_SHARD_COUNT=16
+EVIDENCE_CACHE_TTL_SECONDS=300
+INVESTIGATION_ACTIVE_RULESET_VERSION=rules-2026-06-26.v1
+INVESTIGATION_RULE_CACHE_TTL_SECONDS=300
+NLG_PROMPT_VERSION=nlg-prompt-2026-06-26.v1
+NLG_TEMPLATE_VERSION=nlg-template-2026-06-26.v1
+SAFETY_POLICY_VERSION=safety-policy-2026-06-26.v1
+LOG_LEVEL=INFO
+GOOGLE_API_KEY=
+GOOGLE_MODEL=gemini-2.5-flash
+GOOGLE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+LLM_TIMEOUT_SECONDS=8
+LLM_MAX_COMPLAINT_CHARS=8000
 ```
 
 ---
@@ -578,7 +573,7 @@ All guardrails run **deterministically** (not AI-based) and execute **after** NL
 | Model | Purpose | Latency | Cost | Why Chosen |
 |-------|---------|---------|------|-----------|
 | **Rule Engine** | Transaction matching, classification, routing | <1ms | $0 | Instant, auditable, no API calls |
-| **Claude 3.5 Sonnet** | Text generation (summary, action, reply) | 3–8s | $0.002/call | Fast, multilingual, high quality |
+| **gemini-2.5-flash** | Text generation (summary, action, reply) | 3–8s | $0.002/call | Fast, multilingual, high quality |
 | **Safety Guardrails** | Credential/promise/injection detection | <1ms | $0 | Deterministic, zero false negatives |
 | **Language Detector** | Identify EN/BN/mixed | <1ms | $0 | Fast, offline, library-based |
 | **Intent Parser** | Extract amount, time, counterparty | <1ms | $0 | Deterministic, Bangla-aware |
@@ -619,7 +614,7 @@ All guardrails run **deterministically** (not AI-based) and execute **after** NL
 - Safety + Output: <15ms
 - **Total: 3–8s (p95), guaranteed <30s**
 
-**Why Claude 3.5 Sonnet?**
+**Why gemini-2.5-flash?**
 -  Multilingual (English + Bangla native)
 -  Fast (3–8s acceptable for 30s SLA)
 -  Cheap (~$0.002 per call)
