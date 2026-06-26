@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.config import get_settings
-from app.core.llm import AnthropicNLGClient, NLGPayload
+from app.core.llm import GeminiNLGClient, NLGPayload
 from app.core.nlg import build_template_summary
 from app.core.reasoning import AnalysisFacts
 from app.core.safety import enforce_customer_reply_safety
@@ -12,7 +12,7 @@ from app.nlg_service.schemas import NLGDecisionInput, NLGDraftRequest, NLGDraftR
 class NLGAndSafetyService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.llm_client = AnthropicNLGClient(self.settings)
+        self.llm_client = GeminiNLGClient(self.settings)
 
     async def draft(self, payload: NLGDraftRequest) -> NLGDraftResponse:
         facts = self._facts_from_decision(payload.decision)

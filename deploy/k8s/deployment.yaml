@@ -28,11 +28,11 @@ spec:
                 secretKeyRef:
                   name: queuestorm-secrets
                   key: auth-jwt-secret
-            - name: ANTHROPIC_API_KEY
+            - name: GOOGLE_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: queuestorm-secrets
-                  key: anthropic-api-key
+                  key: google-api-key
                   optional: true
           readinessProbe:
             httpGet:

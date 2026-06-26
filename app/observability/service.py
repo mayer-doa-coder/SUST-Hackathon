@@ -18,7 +18,7 @@ class ObservabilityService:
             ComponentHealth(name="workflow", status="ok", detail="Workflow repository is reachable."),
             ComponentHealth(name="pubsub-audit-routing", status="ok", detail="In-memory broker is reachable."),
         ]
-        if settings.readiness_require_llm_key and not settings.anthropic_api_key:
+        if settings.readiness_require_llm_key and not settings.google_api_key:
             components.append(ComponentHealth(name="llm-provider", status="degraded", detail="LLM key is required but missing."))
         else:
             components.append(ComponentHealth(name="llm-provider", status="ok", detail="Optional; template fallback is available."))

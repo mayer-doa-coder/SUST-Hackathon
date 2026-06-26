@@ -29,7 +29,7 @@ Create secrets first:
 kubectl create namespace queuestorm
 kubectl -n queuestorm create secret generic queuestorm-secrets \
   --from-literal=auth-jwt-secret='replace-me' \
-  --from-literal=anthropic-api-key=''
+  --from-literal=google-api-key=''
 kubectl apply -f deploy/k8s/
 ```
 

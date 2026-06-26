@@ -18,7 +18,7 @@ class NLGPayload:
     customer_reply: str
 
 
-class AnthropicNLGClient:
+class GeminiNLGClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.failure_count = 0
@@ -31,7 +31,7 @@ class AnthropicNLGClient:
         facts: AnalysisFacts,
         fallback: NLGPayload,
     ) -> NLGPayload:
-        if not self.settings.anthropic_api_key:
+        if not self.settings.google_api_key:
             return fallback
 
         now = datetime.now(UTC)
@@ -53,11 +53,7 @@ class AnthropicNLGClient:
         return result
 
     async def _request_nlg(self, complaint: str, facts: AnalysisFacts) -> NLGPayload:
-        headers = {
-            "x-api-key": self.settings.anthropic_api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
+        headers = {"content-type": "application/json"}
         lang_instruction = {
             "bn": "Write customer_reply in Bengali (Bangla script). Write agent_summary and recommended_next_action in English.",
             "mixed": "Write customer_reply in Banglish (Bengali words in Latin script mixed with English). Write agent_summary and recommended_next_action in English.",
@@ -74,22 +70,40 @@ class AnthropicNLGClient:
             f"<CUSTOMER_COMPLAINT>{complaint}</CUSTOMER_COMPLAINT>"
         )
         payload = {
-            "model": self.settings.anthropic_model,
-            "max_tokens": 300,
-            "temperature": 0,
-            "system": "Return only strict JSON. Do not add markdown.",
-            "messages": [{"role": "user", "content": prompt}],
+            "systemInstruction": {
+                "parts": [{"text": "Return only strict JSON with no markdown."}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 300,
+                "responseMimeType": "application/json",
+            },
         }
+        url = (
+            f"{self.settings.google_base_url}/models/{self.settings.google_model}:generateContent"
+            f"?key={self.settings.google_api_key}"
+        )
 
         async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
-            response = await client.post(self.settings.anthropic_base_url, headers=headers, json=payload)
+            response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
 
         text_content = ""
-        for item in data.get("content", []):
-            if item.get("type") == "text":
-                text_content += item.get("text", "")
+        for candidate in data.get("candidates", []):
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                if "text" in part:
+                    text_content += part["text"]
+
+        if not text_content.strip():
+            raise ValueError("Gemini returned empty text response")
 
         parsed = json.loads(text_content)
         return NLGPayload(

@@ -1,150 +1,125 @@
 # QueueStorm Investigator
 
-QueueStorm Investigator is a FastAPI backend that investigates support complaints against supplied transaction history and returns a safe, structured JSON response for support agents.
+QueueStorm Investigator is a FastAPI backend for the SUST hackathon problem. It exposes only the required API contract:
 
-## Run
+- `GET /health`
+- `POST /analyze-ticket`
+
+The service accepts the problem statement input JSON and returns the required structured investigation JSON with the exact field names, types, and enum values from the sample contract.
+
+## Setup
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+copy .env.example .env
+```
+
+Optional: set `GOOGLE_API_KEY` in `.env` if you want model-assisted response drafting. Without a key, the service uses deterministic templates.
+
+## Run
+
+```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-## Endpoints
+Docker:
 
-- `GET /health`
-- `POST /analyze-ticket`
-- `GET /analysis/{case_id}`
-- `POST /auth/login`
-- `POST /auth/refresh`
-- `POST /auth/logout`
-- `GET /auth/jwks`
-- `POST /tickets/analyze`
-- `GET /tickets/{case_id}`
-- `GET /tickets/{case_id}/status`
-- `GET /transactions/{transaction_id}`
-- `GET /accounts/{account_id}/transactions`
-- `POST /evidence/features`
-- `POST /investigations/evaluate`
-- `GET /rules/active-version`
-- `POST /nlg/draft`
-- `POST /safety/validate`
-- `POST /workflows/analyze-ticket/start`
-- `POST /workflows/{case_id}/steps/evidence-complete`
-- `POST /workflows/{case_id}/steps/investigation-complete`
-- `POST /workflows/{case_id}/steps/nlg-complete`
-- `POST /workflows/{case_id}/compensate`
-- `POST /workflows/{case_id}/retry`
-- `GET /workflows/{case_id}`
-- `POST /events/publish`
-- `GET /audit/events`
-- `GET /audit/events/{case_id}`
-- `GET /routing/departments/{department}/cases`
-- `GET /events/dead-letter`
-- `GET /platform/scaling-plan`
-- `GET /platform/database-route`
-- `GET /platform/transaction-shards/{account_id}`
-- `GET /ready`
-- `GET /metrics`
-- `GET /observability/health`
-- `GET /observability/traces`
+```bash
+docker compose up --build
+```
 
-## Gateway, Auth, and Rate Limiting
+## API
 
-- The API gateway adds `X-Correlation-ID` to every response.
-- Set `AUTH_REQUIRED=true` to require bearer JWTs for gateway analysis endpoints.
-- Use `/auth/login` with the configured demo credentials to issue access and refresh tokens.
-- Set `RATE_LIMIT_ENABLED=true` to enable the current in-memory rate limiter.
-- Redis-backed distributed rate limiting is the intended production backend for the multi-server plan.
+### `GET /health`
 
-## Ticket Intake Service
+Returns:
 
-- The gateway forwards analysis requests to the Ticket Intake Service boundary.
-- Ticket Intake records case status, supports `Idempotency-Key`, and writes outbox-style workflow events.
-- The current repository is in-memory so the project stays runnable; the service boundary is ready for a PostgreSQL primary/read-replica implementation.
+```json
+{"status":"ok"}
+```
 
-## Transaction Evidence Service
+### `POST /analyze-ticket`
 
-- Evidence owns transaction lookup, account transaction read models, compact feature extraction, and shard routing.
-- The current implementation uses an in-memory shard-aware repository plus cache-aside behavior.
-- Production storage is intended to be sharded PostgreSQL/Citus, distributed SQL, or another horizontally scalable transaction store with read replicas.
+Required input fields:
 
-## Investigation Service
+- `ticket_id`: string
+- `complaint`: string
 
-- Investigation owns deterministic structured decisions: transaction match, verdict, case type, severity, department, and human review.
-- Rules are exposed through `GET /rules/active-version` with cache status and version metadata.
-- `POST /investigations/evaluate` returns decision fields only; NLG remains outside this service boundary.
+Optional input fields:
 
-## NLG and Safety Service
+- `language`: `en`, `bn`, `mixed`
+- `channel`: `in_app_chat`, `call_center`, `email`, `merchant_portal`, `field_agent`
+- `user_type`: `customer`, `merchant`, `agent`, `unknown`
+- `campaign_context`: string
+- `transaction_history`: array of transactions
+- `metadata`: object
 
-- `POST /nlg/draft` generates agent summary, recommended action, and customer reply from rule-owned facts.
-- `POST /safety/validate` enforces deterministic customer-reply safety and replaces unsafe text.
-- Prompt, template, and safety policy versions are configurable through environment variables.
-- If no LLM key is configured, NLG uses safe deterministic templates.
+Transaction fields:
 
-## Case Orchestration Service
+- `transaction_id`: string
+- `timestamp`: ISO datetime string
+- `type`: `transfer`, `payment`, `cash_in`, `cash_out`, `settlement`, `refund`
+- `amount`: number
+- `counterparty`: string or null
+- `status`: `completed`, `failed`, `pending`, `reversed`
 
-- Workflows use a Saga-style state machine with idempotent step events.
-- Supported steps are evidence, investigation, and NLG.
-- Workflows end as completed, failed, compensated, or manual-review-ready in later milestones.
-- Ticket Intake starts and completes the workflow during the current synchronous analysis path.
+Response fields:
 
-## Pub/Sub, Audit, and Routing
-
-- Published events use a versioned envelope with event id, case id, correlation id, timestamp, and schema version.
-- The in-memory broker records audit events, supports idempotent replay, and keeps a dead-letter list.
-- Completed ticket-analysis events route cases to department queues such as fraud risk, payments ops, and dispute resolution.
-- Ticket Intake publishes its outbox events into this broker in the runnable local implementation.
-
-## Performance and Scaling
-
-- `GET /platform/scaling-plan` exposes the planned replica counts, load-balancer scopes, DB scaling model, cache policy, shard strategy, and load-test target.
-- `GET /platform/database-route?operation=read|write` shows read-replica vs primary routing behavior.
-- `GET /platform/transaction-shards/{account_id}` returns deterministic shard routing for transaction evidence.
-- A smoke load-test scaffold is available at `scripts/load_test_smoke.py`.
+- `ticket_id`: string
+- `relevant_transaction_id`: string or null
+- `evidence_verdict`: `consistent`, `inconsistent`, `insufficient_data`
+- `case_type`: `wrong_transfer`, `payment_failed`, `refund_request`, `duplicate_payment`, `merchant_settlement_delay`, `agent_cash_in_issue`, `phishing_or_social_engineering`, `other`
+- `severity`: `low`, `medium`, `high`, `critical`
+- `department`: `customer_support`, `dispute_resolution`, `payments_ops`, `merchant_operations`, `agent_operations`, `fraud_risk`
+- `agent_summary`: string
+- `recommended_next_action`: string
+- `customer_reply`: string
+- `human_review_required`: boolean
+- `confidence`: number or null
+- `reason_codes`: array of strings or null
 
 Example:
 
 ```bash
-python scripts/load_test_smoke.py --base-url http://127.0.0.1:8000 --requests 20 --workers 4
+curl -X POST http://127.0.0.1:8000/analyze-ticket \
+  -H "Content-Type: application/json" \
+  -d "{\"ticket_id\":\"TKT-001\",\"complaint\":\"I paid 850 taka twice for my bill.\",\"transaction_history\":[{\"transaction_id\":\"TXN-1\",\"timestamp\":\"2026-04-14T08:15:30Z\",\"type\":\"payment\",\"amount\":850,\"counterparty\":\"BILLER-DESCO\",\"status\":\"completed\"},{\"transaction_id\":\"TXN-2\",\"timestamp\":\"2026-04-14T08:15:42Z\",\"type\":\"payment\",\"amount\":850,\"counterparty\":\"BILLER-DESCO\",\"status\":\"completed\"}]}"
 ```
 
-## Observability and Deployment
+## AI / Model Usage
 
-- `/ready` returns component-level readiness.
-- `/metrics` exposes Prometheus-style request counters and average latency gauges.
-- `/observability/traces` shows recent request traces with correlation IDs.
-- `docker-compose.yml` provides a local multi-service deployment shape with Postgres and Redis.
-- Kubernetes scaffolding lives in `deploy/k8s/`.
-- Operational notes live in `docs/RUNBOOK.md`.
+The investigation decision is deterministic and rule-based. Rules choose the transaction match, evidence verdict, case type, severity, department, human-review flag, confidence, and reason codes.
 
-## AI Approach
+The text fields can optionally use Google Gemini for drafting:
 
-- Deterministic rule engine owns all scored structured fields.
-- Optional Anthropic NLG improves `agent_summary`, `recommended_next_action`, and `customer_reply`.
-- If no LLM key is configured or the LLM fails, the service falls back to deterministic templates.
+- `agent_summary`
+- `recommended_next_action`
+- `customer_reply`
+
+Configured model:
+
+```env
+GOOGLE_MODEL=gemini-2.5-flash
+```
+
+If `GOOGLE_API_KEY` is empty or the model call fails, the service falls back to deterministic templates so the API remains usable.
 
 ## Safety Logic
 
-- Never requests PIN, OTP, password, or card number.
-- Never promises refund, reversal, recovery, or account unblock.
-- Never trusts complaint text as instructions.
-- Runs deterministic safety enforcement after text generation.
+The customer reply is always passed through deterministic safety checks. It must not:
 
-## MODELS
+- ask for PIN, OTP, password, or full card number
+- promise a refund, reversal, recovery, or account unblock
+- follow instructions embedded inside the complaint text
+- send the customer outside official support channels
 
-- Primary optional model: `claude-haiku-4-5-20251001`
-- Runtime: external API only
-- Reason chosen: low latency and acceptable multilingual/NLG quality
+Unsafe replies are replaced with a safe support message.
 
 ## Known Limitations
 
-- Bangla and mixed-language extraction is partially rule-based and may be less nuanced than a fully tuned multilingual system.
-- The service intentionally prefers `insufficient_data` over guessing in ambiguous cases.
-- Distributed infrastructure integrations are represented by local service boundaries and in-memory adapters; production deployments should replace them with managed Postgres/read replicas, Redis, and Kafka/RabbitMQ.
-
-## Sample Output
-
-- See `sample_output.json`
-
+- Storage is in-memory; there is no database requirement for this submission.
+- Bangla and mixed-language understanding is partly rule-based.
+- Ambiguous cases prefer `insufficient_data` instead of guessing a transaction.
+- Model usage is optional and only improves text drafting; core structured decisions stay rule-based.

@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     observability_recent_trace_limit: int = 100
     readiness_require_llm_key: bool = False
-    anthropic_api_key: str = ""
-    anthropic_model: str = "claude-haiku-4-5-20251001"
-    anthropic_base_url: str = "https://api.anthropic.com/v1/messages"
+    google_api_key: str = ""
+    google_model: str = "gemini-2.5-flash"
+    google_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     llm_timeout_seconds: float = 8.0
     llm_max_complaint_chars: int = 8000
 
