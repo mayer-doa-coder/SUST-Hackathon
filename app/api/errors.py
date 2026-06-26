@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException
 
 from app.api.schemas import ErrorBody, ErrorResponse
 from app.auth.service import AuthError

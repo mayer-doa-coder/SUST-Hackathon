@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 import re
 
 from app.domain.enums import Language, TransactionType
@@ -130,7 +130,7 @@ class ComplaintIntent:
 
 def _anchor_bst_date(transaction_timestamps: list[datetime]) -> date:
     if not transaction_timestamps:
-        return datetime.utcnow().date()
+        return datetime.now(UTC).date()
     return max(transaction_timestamps).date()
 
 
