@@ -263,7 +263,7 @@ SUST-Hackathon/
 ### Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/SUST-Hackathon.git
+git clone https://github.com/mayer-doa-coder/SUST-Hackathon.git
 cd SUST-Hackathon
 ```
 
@@ -348,7 +348,7 @@ docker-compose up -d
 pytest tests/ -v
 ```
 
-All 33 tests should pass. ✅
+
 
 ---
 
@@ -619,7 +619,7 @@ All guardrails run **deterministically** (not AI-based) and execute **after** NL
 ### Local Development
 
 ```bash
-git clone https://github.com/yourusername/SUST-Hackathon.git
+git clone https://github.com/mayer-doa-coder/SUST-Hackathon.git
 cd SUST-Hackathon
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
@@ -708,7 +708,7 @@ gcloud run deploy queuestorm \
 
 ---
 
-**Repository:** https://github.com/yourusername/SUST-Hackathon
+**Repository:** https://github.com/mayer-doa-coder/SUST-Hackathon.git
 
 ---
 
