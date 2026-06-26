@@ -1,0 +1,1 @@
+"""Ticket Intake Service slice."""

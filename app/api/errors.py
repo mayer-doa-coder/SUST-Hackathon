@@ -9,6 +9,11 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.api.schemas import ErrorBody, ErrorResponse
+from app.auth.service import AuthError
+from app.evidence.repository import TransactionNotFoundError
+from app.gateway.upstream import GatewayUpstreamError
+from app.tickets.repository import TicketNotFoundError
+from app.workflows.repository import WorkflowConflictError, WorkflowNotFoundError
 
 
 def _extract_ticket_id(body: Any) -> str | None:
@@ -43,6 +48,30 @@ async def _try_parse_request_body(request: Request) -> Any:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AuthError)
+    async def auth_handler(_: Request, exc: AuthError) -> JSONResponse:
+        return _error_response(exc.status_code, exc.code, exc.message)
+
+    @app.exception_handler(GatewayUpstreamError)
+    async def gateway_upstream_handler(_: Request, exc: GatewayUpstreamError) -> JSONResponse:
+        return _error_response(exc.status_code, exc.code, exc.message)
+
+    @app.exception_handler(TicketNotFoundError)
+    async def ticket_not_found_handler(_: Request, exc: TicketNotFoundError) -> JSONResponse:
+        return _error_response(404, "TICKET_NOT_FOUND", "Ticket analysis case was not found.", str(exc))
+
+    @app.exception_handler(TransactionNotFoundError)
+    async def transaction_not_found_handler(_: Request, exc: TransactionNotFoundError) -> JSONResponse:
+        return _error_response(404, "TRANSACTION_NOT_FOUND", "Transaction was not found.", str(exc))
+
+    @app.exception_handler(WorkflowNotFoundError)
+    async def workflow_not_found_handler(_: Request, exc: WorkflowNotFoundError) -> JSONResponse:
+        return _error_response(404, "WORKFLOW_NOT_FOUND", "Workflow case was not found.", str(exc))
+
+    @app.exception_handler(WorkflowConflictError)
+    async def workflow_conflict_handler(_: Request, exc: WorkflowConflictError) -> JSONResponse:
+        return _error_response(409, "WORKFLOW_CONFLICT", exc.message)
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         raw_body = await _try_parse_request_body(request)

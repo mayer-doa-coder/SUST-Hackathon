@@ -2,54 +2,53 @@ from __future__ import annotations
 
 from app.api.schemas import AnalyzeTicketRequest, AnalyzeTicketResponse
 from app.config import get_settings
-from app.core.intent import extract_intent
-from app.core.language import detect_language
-from app.core.llm import AnthropicNLGClient, NLGPayload
-from app.core.nlg import build_template_summary
 from app.core.normalization import sanitize_complaint
-from app.core.reasoning import investigate
-from app.core.safety import enforce_customer_reply_safety
 from app.domain.enums import UserType
+from app.evidence.service import transaction_evidence_service
+from app.investigation.service import investigation_service
+from app.nlg_service.schemas import NLGDecisionInput, NLGDraftRequest
+from app.nlg_service.service import nlg_safety_service
 
 
 settings = get_settings()
-llm_client = AnthropicNLGClient(settings)
 
 
 async def analyze_ticket(payload: AnalyzeTicketRequest) -> AnalyzeTicketResponse:
     user_type = payload.user_type or UserType.UNKNOWN
     sanitized_complaint = sanitize_complaint(payload.complaint, settings.llm_max_complaint_chars)
-    language = detect_language(sanitized_complaint, payload.language)
-    transaction_timestamps = [txn.timestamp for txn in payload.transaction_history]
-    intent = extract_intent(sanitized_complaint, language, transaction_timestamps)
-    facts = investigate(intent, payload.transaction_history, user_type)
-
-    summary, next_action, customer_reply = build_template_summary(
-        payload.ticket_id,
-        sanitized_complaint,
-        facts,
-        user_type,
-    )
-
-    llm_payload = await llm_client.generate(
-        sanitized_complaint,
-        facts,
-        NLGPayload(
-            agent_summary=summary,
-            recommended_next_action=next_action,
-            customer_reply=customer_reply,
-        ),
-    )
-
-    safe_reply, violated = enforce_customer_reply_safety(
-        payload.ticket_id,
-        language,
-        user_type,
-        llm_payload.customer_reply,
+    evidence_features = transaction_evidence_service.prepare_features(payload.ticket_id, payload.transaction_history)
+    facts, rule_version, rules_cache_status = investigation_service.evaluate(payload, sanitized_complaint)
+    draft = await nlg_safety_service.draft(
+        NLGDraftRequest(
+            ticket_id=payload.ticket_id,
+            complaint=sanitized_complaint,
+            user_type=user_type,
+            decision=NLGDecisionInput(
+                relevant_transaction_id=facts.relevant_transaction_id,
+                evidence_verdict=facts.evidence_verdict,
+                case_type=facts.case_type,
+                severity=facts.severity,
+                department=facts.department,
+                human_review_required=facts.human_review_required,
+                confidence=facts.confidence,
+                reason_codes=facts.reason_codes,
+                language=facts.language,
+            ),
+        )
     )
 
     reason_codes = list(facts.reason_codes)
-    if violated:
+    reason_codes.append(f"evidence_shard_{evidence_features.shard_id}")
+    reason_codes.append(f"ruleset_{rule_version}")
+    if rules_cache_status == "hit":
+        reason_codes.append("rules_cache_hit")
+    if evidence_features.duplicate_payment is not None and "duplicate_payment_candidate" not in reason_codes:
+        reason_codes.append("duplicate_payment_candidate")
+    reason_codes.append(f"nlg_template_{draft.template_version}")
+    reason_codes.append(f"safety_policy_{draft.safety_policy_version}")
+    if draft.used_fallback:
+        reason_codes.append("nlg_template_fallback")
+    if draft.safety_replaced:
         reason_codes.append("safety_replaced")
 
     return AnalyzeTicketResponse(
@@ -59,9 +58,9 @@ async def analyze_ticket(payload: AnalyzeTicketRequest) -> AnalyzeTicketResponse
         case_type=facts.case_type,
         severity=facts.severity,
         department=facts.department,
-        agent_summary=llm_payload.agent_summary or summary,
-        recommended_next_action=llm_payload.recommended_next_action or next_action,
-        customer_reply=safe_reply,
+        agent_summary=draft.agent_summary,
+        recommended_next_action=draft.recommended_next_action,
+        customer_reply=draft.customer_reply,
         human_review_required=facts.human_review_required,
         confidence=facts.confidence,
         reason_codes=reason_codes or None,

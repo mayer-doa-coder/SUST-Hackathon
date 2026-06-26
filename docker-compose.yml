@@ -1,0 +1,42 @@
+services:
+  gateway:
+    build: .
+    image: queuestorm-investigator:local
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: local-compose
+      PORT: 8000
+      SERVICE_NAME: queuestorm-investigator-gateway
+      AUTH_REQUIRED: "false"
+      RATE_LIMIT_ENABLED: "false"
+      CACHE_BACKEND: in-memory
+      DATABASE_PRIMARY_URL: postgresql://postgres:postgres@postgres:5432/queuestorm
+      DATABASE_READ_REPLICA_URLS: postgresql://postgres:postgres@postgres:5432/queuestorm
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: queuestorm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:

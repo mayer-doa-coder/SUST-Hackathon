@@ -1,352 +1,346 @@
-# QueueStorm Investigator Pre-Coding Execution Plan
+# QueueStorm Investigator Distributed Architecture Execution Plan
 
 ## 1. Executive Summary
 
 ### Product Understanding
-QueueStorm Investigator is an internal support copilot for a Bangladesh digital finance platform under campaign surge conditions. It is not a chatbot, not a generic classifier, and not a payment system. Its job is to investigate a complaint against the supplied transaction history, determine what the evidence supports, classify and route the case safely, and draft support-ready language.
+QueueStorm Investigator is an internal support copilot for a Bangladesh digital finance platform under campaign surge conditions. Its job is to investigate a complaint against supplied transaction history, determine what the evidence supports, classify and route the case safely, and draft support-ready language.
 
-### Business and User Reality
-The business problem is operational collapse under campaign load: agents move from manageable queue volume to complaint saturation, and the cost of mistakes is unusually high because the domain is financial support. The direct user is the support agent. Secondary users are the receiving departments: dispute resolution, payments ops, merchant ops, agent ops, and fraud risk. Indirect users are customers and merchants who receive the drafted reply. Judges are also a practical user because machine-readable correctness determines scoreability.
+### Target Architecture Direction
+This plan uses a microservice architecture with multiple deployable servers, separate data ownership per service, load balancing, caching, message queues, read/write database separation, replication, sharding, rate limiting, JWT-based authentication, API gateway/proxy routing, and distributed transaction patterns.
 
-### Requirement Priorities
-Ground-truth, problem statement, rubric, and team manual all align on the same scoring truth:
-- `GET /health` and `POST /analyze-ticket` must work first.
-- Schema correctness is the gate to any score.
-- Evidence reasoning is the highest-weight capability.
-- Safety violations are catastrophic.
-- Multilingual handling, especially Bangla numerals and Bangla replies, is mandatory.
-- Deployment must be judgeable with no manual help.
+The architecture is designed around these core scaling challenges:
+- Too many concurrent users during campaign surges.
+- Too much transaction and audit data to move around synchronously.
+- The system must be fast and responsive for support agents.
+- Some states may be temporarily inconsistent because distributed systems favor availability in selected paths.
+- Financial-support decisions require safety, traceability, and controlled escalation.
 
-### Architecture Understanding
-The sound architectural center is a modular monolith with a deterministic rule engine for all scored structured fields and LLM usage limited to language understanding where needed plus NLG for the three text fields. The trust boundary is explicit:
-- Rules own `relevant_transaction_id`, `evidence_verdict`, `case_type`, `severity`, `department`, `human_review_required`.
-- LLM owns `agent_summary`, `recommended_next_action`, `customer_reply`.
-- Safety enforcement is code after NLG, before response.
+### High-Level Service Map
+- API Gateway / Reverse Proxy: public entry point, TLS termination, routing, JWT validation, rate limiting, request correlation.
+- Auth Service: login, JWT generation, token refresh, role claims, key rotation.
+- Ticket Intake Service: validates `/analyze-ticket`, stores ticket metadata, starts analysis workflow.
+- Investigation Service: deterministic evidence reasoning, transaction matching, classification, severity, department routing.
+- Transaction Evidence Service: owns transaction lookup, read models, partitioned transaction access, fraud/duplicate signals.
+- NLG and Safety Service: LLM/template generation, Bangla/English replies, deterministic safety enforcement.
+- Case Orchestration Service: coordinates distributed workflow through Saga orchestration and exposes workflow status.
+- Audit Service: immutable decision/event log for compliance and debugging.
+- Notification/Routing Service: publishes routed cases to dispute, payments, merchant ops, agent ops, or fraud risk queues.
+- Observability Service Stack: logs, metrics, traces, dashboards, alerts.
 
-### Security and Safety Understanding
-This is effectively a regulated communication system. Main controls:
-- Never ask for PIN, OTP, password, or card number.
-- Never promise refund, reversal, unblock, or recovery without authority.
-- Never route customers to unofficial contacts.
-- Never let complaint text override system behavior.
-- Never leak secrets, stack traces, prompts, or internal details.
+### Data Ownership Summary
+- Auth Service: PostgreSQL for users, roles, refresh tokens, signing key metadata.
+- Ticket Intake Service: PostgreSQL primary for ticket records, read replica for agent queries.
+- Investigation Service: PostgreSQL or embedded rule configuration store; Redis for hot rule/config cache.
+- Transaction Evidence Service: sharded PostgreSQL or distributed SQL for transaction metadata; optional object storage for bulk history; Redis for recent transaction cache.
+- NLG and Safety Service: PostgreSQL for prompt/template versions and safety policy versions; Redis for provider circuit state.
+- Audit Service: append-only event store using Kafka plus long-term object storage or ClickHouse/OpenSearch for querying.
+- Notification Service: Kafka topics or RabbitMQ exchanges for department routing.
 
-### AI Understanding
-The docs consistently favor hybrid AI:
-- Deterministic reasoning for evidence and routing.
-- LLM for multilingual extraction only when rules are insufficient.
-- LLM for human-quality summaries and customer replies.
-- Template fallback when LLM is slow or unavailable.
-- Circuit-breaker or equivalent fast failover is worth keeping because external API instability is a likely hackathon risk.
+### Trust Boundary
+- Deterministic services own structured decisions: transaction id, evidence verdict, case type, severity, department, human review.
+- NLG owns only text fields: `agent_summary`, `recommended_next_action`, `customer_reply`.
+- Safety enforcement runs after NLG and before the final response/event is committed.
+- Complaint text is untrusted input and cannot override system behavior.
 
-### Deployment and Evaluation Understanding
-The highest-value deployment target is a single reachable HTTPS service with minimal moving parts. The team manual explicitly discourages heavyweight infra for this round. Evaluation is automated first, manual second, so the implementation order must be:
-1. schema and endpoints
-2. reasoning
-3. safety
-4. reliability/performance
-5. docs and polish
-
-### Key Constraints
-- 4.5-hour hackathon window
-- 30-second hard per-request timeout
-- 60-second health readiness
-- Docker image hard limit 1 GB from team manual
-- No GPU, no huge local weights, no multi-GB downloads
-- Stateless service
-- Hidden tests include ambiguous, malformed, multilingual, and adversarial inputs
-
-### Primary Risks
-- Overbuilding infrastructure instead of scoring logic
-- LLM latency causing timeout or instability
-- Wrong transaction match on ambiguous inputs
-- Unsafe reply text despite otherwise correct reasoning
-- Bangla handling failing on numerals, time references, or reply language
-- Schema drift from exact enum/type contract
+### CAP Theorem Position
+- Auth, ticket creation, final decision records, and audit writes favor consistency over availability where correctness matters.
+- Transaction read models, dashboards, notifications, and cached case status favor availability and partition tolerance with eventual consistency.
+- Agent-facing analysis uses a bounded-consistency approach: return the best available validated decision quickly, while asynchronous events repair or enrich non-critical state.
 
 ---
 
 ## 2. Architecture Review
 
-### Strengths in the HLD
-- Correct core pattern: modular monolith, not microservices
-- Correct trust boundary: rule engine for structured decisions, LLM for NLG
-- Correct safety model: deterministic post-processing
-- Correct fallback thinking: LLM fallback and template fallback
-- Correct prioritization of statelessness, schema validation, and prompt-injection isolation
-- Strong emphasis on ambiguity handling and `insufficient_data` over guessing
+### Chosen Architecture Pattern
+- Microservices with clear bounded contexts.
+- API Gateway / proxy pattern for a single external contract.
+- Database-per-service ownership.
+- CQRS for high-volume read paths.
+- Saga pattern for distributed transactions.
+- Event-driven integration through Kafka/RabbitMQ.
+- Cache-aside pattern for hot reads.
+- Read replicas and sharding for scalable data access.
+- Horizontal autoscaling behind load balancers.
 
-### Weaknesses / Unrealistic Assumptions
-- HLD is materially overbuilt for a 4.5-hour preliminary round.
-- Redis, PostgreSQL, Kafka, NGINX, Prometheus, Grafana, OpenTelemetry, Jaeger, blue-green deploys, HPA, and Kubernetes are not scoring-critical and create integration risk.
-- Health checks that depend on Redis/Postgres conflict with the hackathon need for fast readiness and minimal failure surface.
-- Production-grade observability and replication design are architecturally fine but hackathon-negative.
-- CQRS/outbox/eventing are unjustified for a two-endpoint stateless service with no real integration consumers.
-- Idempotency via Redis is useful in theory but not on the must-have path for preliminary scoring.
+### Why Microservices Fit This Version
+- Campaign traffic can scale individual services independently.
+- Transaction lookup load is separated from NLG latency.
+- Safety and compliance logging can evolve independently.
+- Multiple teams can own API/platform, evidence reasoning, AI/safety, and infrastructure.
+- Failures can be isolated: if NLG is slow, deterministic structured analysis can still complete with templates.
 
-### Underengineering Risks in the HLD
-- The HLD underplays the cost of Bangla time interpretation and timezone alignment in a pure rule path.
-- It also leaves some open product decisions unresolved, especially reason code taxonomy and exact high-value threshold.
+### Main Distributed-System Risks
+- Cross-service latency can exceed the request timeout.
+- Eventual consistency can show outdated case states.
+- Distributed transactions are harder than local commits.
+- More services increase operational burden.
+- Cache invalidation and replica lag can affect evidence freshness.
+- Misconfigured rate limits can block legitimate support traffic.
 
-### Bottlenecks
-- External LLM latency and rate limits
-- Transaction matching ambiguity
-- Bangla and mixed-language extraction
-- Safety validation coverage
-- Cold-start and deployment stability if extra infra is added
-
-### Recommended Improvements While Preserving Architecture
-- Preserve the modular monolith and rule/LLM separation exactly.
-- Simplify deployment to a single FastAPI/Uvicorn service in one container.
-- Replace Redis/Postgres/Kafka/NGINX/observability stack with in-process logging and optional in-memory resilience mechanisms.
-- Keep template fallback and a lightweight circuit-breaker.
-- Make `/health` independent of optional downstreams.
-- Treat audit persistence, distributed rate limiting, and deep observability as postponed.
-- Keep response generation deterministic enough that the service remains useful even with no LLM key.
-
-### What to Implement Now / Mock / Simplify / Postpone
-Implement now:
-- API contract
-- validation
-- rule engine
-- safety layer
-- template fallback
-- optional primary LLM integration
-- Docker and deployment
-Mock or simplify:
-- LLM provider failover can be one primary provider plus templates if time is tight
-- confidence and reason_codes can be simple deterministic additions
-Postpone:
-- Redis
-- PostgreSQL
-- NGINX
-- Kubernetes
-- Kafka/outbox
-- Prometheus/Grafana/OTel
-- blue-green rollout
-- replicated infra
-- advanced caching and distributed idempotency
+### Design Responses
+- Keep synchronous path narrow: gateway -> intake -> investigation -> evidence -> safety/NLG.
+- Move audit, notifications, analytics, and department routing to async events.
+- Use Saga orchestration for multi-step case creation and routing.
+- Use idempotency keys on write endpoints.
+- Use outbox pattern for reliable event publication.
+- Use circuit breakers, request deadlines, retries with backoff, and fallback templates.
+- Use correlation IDs across all service logs, events, and traces.
 
 ---
 
 ## 3. Evaluation Strategy
 
-### Highest-Scoring Items
-- Evidence Reasoning `35%`
-- Safety & Escalation `20%`
-- API Contract & Schema `15%`
+### Highest-Value Technical Outcomes
+- API contract remains stable behind the gateway.
+- Structured evidence reasoning remains deterministic and testable.
+- Safety enforcement remains deterministic and centralized.
+- System survives high concurrency using load balancing, caching, queues, and horizontal scaling.
+- Read-heavy data paths are separated from write-heavy paths.
+- Distributed workflows are observable, retryable, and idempotent.
 
 ### Mandatory Items
-- Exact endpoints
-- Exact required response fields and enums
-- Controlled malformed-input handling
-- Safe customer replies
-- Correct fraud escalation
-- Bangla complaint support
-- Reachable deployment or runnable Docker fallback
-
-### Nice-to-Have Items
-- `confidence`
-- `reason_codes`
-- polished multilingual tone
-- formal merchant tone
-- fallback/circuit-breaker sophistication
-- cost-aware model selection explanation in README
+- `GET /health` at the gateway and each service.
+- `POST /analyze-ticket` exposed by the gateway.
+- JWT issuance and validation.
+- Rate limiting at the gateway.
+- Service-to-service authentication.
+- Per-service database ownership.
+- Cache strategy for hot transaction/rule reads.
+- Message queue or pub/sub integration for audit and routing.
+- Read/write separation for ticket and transaction stores.
+- Replication and sharding plan for high-volume transaction data.
+- Saga or outbox-based distributed transaction design.
 
 ### Common Failure Points
-- Wrong enum spelling or boolean type
-- Guessing a transaction when evidence is ambiguous
-- Using LLM to decide structured fields
-- Unsafe phrases like “we will refund you”
-- English-only replies
-- deployment not reachable
-- health endpoint tied to non-essential dependencies
-
-### Hidden Scoring Opportunities
-- Strong `insufficient_data` behavior
-- Established recipient inconsistency detection
-- Correct duplicate-payment selection of the second transaction
-- Bangla numeral normalization
-- Merchant tone differentiation
-- Honest, limited, safe fallback replies when data is unclear
-
-### Engineering Focus Order
-1. schema and endpoint correctness
-2. transaction matching and evidence verdict
-3. safety guardrails
-4. multilingual correctness
-5. LLM polish and fallback quality
-6. deployment reproducibility
-7. documentation and submission quality
+- Gateway schema differs from internal service schema.
+- Services share databases directly instead of using APIs/events.
+- Synchronous calls fan out too widely.
+- Read replicas serve stale state without clear UI/status semantics.
+- Kafka/RabbitMQ events are published without idempotency.
+- Cache returns stale rule or transaction state without versioning.
+- JWT is generated but not validated consistently across services.
 
 ---
 
 ## 4. Implementation Roadmap
 
-### Milestone 1: Service Skeleton and Contract Gate
-- Goal: runnable API with `GET /health`, request/response schemas, global error handling
-- Why: unlocks judge reachability and prevents unscoreable outputs
-- Business value: makes the service externally testable immediately
-- Components: app bootstrap, routing, schema definitions, enum source of truth, error mapper, config loading
-- Files involved: app entrypoint, API schemas, enums/constants, config, error handlers
-- Dependencies: none
-- Deliverables: health endpoint, analyze route stub, 400/422/500 contract shape
-- Testing strategy: curl/manual contract tests; malformed JSON; missing fields; empty complaint; unknown fields
-- Acceptance criteria: `/health` returns `{"status":"ok"}`; `/analyze-ticket` returns controlled schema-valid responses and never crashes
-- Risks: schema drift, wrong status codes
-- Mitigation: central enum/constants and response-model validation
-- Estimated time: 25 minutes
+### Milestone 1: API Gateway, Proxy, and Contract Boundary
+- Goal: expose a single stable external API while routing internally to microservices.
+- Why: the gateway protects clients from service layout changes and enables centralized traffic controls.
+- Business value: support agents and judges use one endpoint even as the backend scales horizontally.
+- Components: API gateway, reverse proxy, route mapping, request/response schema validation, correlation ID middleware, gateway health endpoint.
+- Database choice: none; gateway remains stateless.
+- Scaling design: multiple gateway replicas behind a cloud load balancer or NGINX/Envoy/Traefik.
+- Endpoints: `GET /health`, `POST /analyze-ticket`, `GET /analysis/{case_id}`.
+- Deliverables: gateway service, OpenAPI contract, routing to ticket intake service, centralized error envelope.
+- Testing strategy: contract tests, malformed request tests, upstream timeout tests, correlation ID propagation tests.
+- Acceptance criteria: gateway validates input, proxies valid requests, returns controlled errors, and can run multiple replicas.
+- Risks: gateway becomes too smart.
+- Mitigation: keep business logic in downstream services.
 
-### Milestone 2: Deterministic Input Normalization and Parsing
-- Goal: normalize complaints and prepare structured complaint signals without LLM dependence for English and partial multilingual support
-- Why: matching accuracy starts with clean extraction
-- Business value: reduces false routing and improves hidden-test robustness
-- Components: language detection, Bangla numeral normalization, complaint sanitization, basic extraction of amount/time/type/counterparty/fraud cues
-- Files involved: language detector, input normalizer, intent extractor, constants for keywords/patterns
-- Dependencies: milestone 1
-- Deliverables: normalized complaint context object for downstream rule engine
-- Testing strategy: sample-driven tests for English, Bangla numerals, Banglish, vague complaints, fraud keywords
-- Acceptance criteria: extracted values feed rule engine consistently; complaint language inferred when missing; Bangla numerals parsed
-- Risks: brittle Bangla parsing
-- Mitigation: use minimal rules plus optional LLM assist later for Bangla/mixed only
-- Estimated time: 30 minutes
+### Milestone 2: Auth Service, JWT Generation, and Rate Limiting
+- Goal: protect APIs with JWT authentication and traffic throttling.
+- Why: internal financial-support tools require identity, authorization, and abuse protection.
+- Business value: prevents unauthorized access and protects the platform during surges.
+- Components: login endpoint, JWT generation, refresh-token flow, role claims, signing key rotation, gateway JWT validation, per-user/per-IP/per-role rate limits.
+- Database choice: PostgreSQL primary for users, roles, refresh tokens, and key metadata; read replica for user/session lookups if needed.
+- Cache choice: Redis for token denylist, rate-limit counters, and short-lived session metadata.
+- Scaling design: stateless auth replicas behind internal load balancer; Redis cluster for rate-limit scale.
+- Endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/jwks`.
+- Deliverables: signed JWTs, gateway validation, role-based access control, rate-limit headers.
+- Testing strategy: expired token, invalid signature, revoked token, role denial, burst traffic, distributed rate-limit consistency.
+- Acceptance criteria: protected endpoints reject invalid tokens and throttle excess requests without blocking normal support usage.
+- Risks: Redis outage impacts login/rate limiting.
+- Mitigation: fail closed for auth validation, fail with conservative local limits for rate limiting.
 
-### Milestone 3: Core Investigation Rule Engine
-- Goal: produce correct structured decision fields without any LLM requirement
-- Why: this is the main scoring engine
-- Business value: maximizes evidence reasoning score and ensures reliable routing
-- Components: transaction matcher, duplicate detector, established-recipient check, evidence verdict, classifier, severity mapping, department router, human review engine, optional confidence/reason codes
-- Files involved: matcher, verdict engine, classifier, severity/department/human review tables, confidence/reasoning helpers
-- Dependencies: milestone 2
-- Deliverables: full structured response except polished text fields
-- Testing strategy: all 10 public cases plus adversarial unit cases for ambiguity, no-match, wrong day, pending, duplicate, phishing
-- Acceptance criteria: public sample structured fields are functionally equivalent; ambiguous cases return `null` + `insufficient_data`; phishing always overrides
-- Risks: wrong precedence, overmatching, timezone mismatches
-- Mitigation: strict ordered rules from ground-truth; prefer `insufficient_data` over guess; assume BST complaint references against UTC timestamps
-- Estimated time: 70 minutes
+### Milestone 3: Ticket Intake Service and Write Model
+- Goal: accept analysis requests, persist ticket metadata, and create an idempotent workflow.
+- Why: campaign surges require reliable request acceptance even when downstream services are slower.
+- Business value: no complaint is lost during traffic spikes.
+- Components: request validation, idempotency key handling, ticket write model, outbox table, workflow-start event.
+- Database choice: PostgreSQL primary for ticket writes; read replica for agent-facing ticket queries.
+- Read/write separation: all writes go to primary; status/detail queries prefer replicas with fallback to primary for read-your-write cases.
+- Scaling design: stateless ticket intake replicas; PostgreSQL primary with read replicas; connection pooler such as PgBouncer.
+- Endpoints: `POST /tickets/analyze`, `GET /tickets/{case_id}`, `GET /tickets/{case_id}/status`.
+- Message queue: publish `TicketAnalysisRequested` through outbox to Kafka/RabbitMQ.
+- Deliverables: durable case id, persisted request envelope, idempotent duplicate handling.
+- Testing strategy: duplicate request tests, concurrent same-idempotency-key tests, replica-lag behavior tests.
+- Acceptance criteria: repeated requests do not create duplicate cases and workflow events are eventually published exactly once logically.
+- Risks: database primary bottleneck.
+- Mitigation: partition tickets by date or tenant, use connection pooling, batch outbox publishing.
 
-### Milestone 4: Safety Layer and Safe Template NLG
-- Goal: guarantee safe text outputs even without external AI
-- Why: safety penalties can erase an otherwise strong score
-- Business value: protects final score and keeps service usable during LLM outage
-- Components: safe English/Bangla templates, merchant-tone variants, post-generation safety scanner, reply replacement policy
-- Files involved: fallback NLG, safety enforcer, prompt/output safety constants
-- Dependencies: milestone 3
-- Deliverables: deterministic `agent_summary`, `recommended_next_action`, `customer_reply` generation path and safety gate
-- Testing strategy: injection complaint tests, OTP-asking test, unauthorized refund wording test, suspicious contact test
-- Acceptance criteria: unsafe outputs are replaced; no reply asks for credentials or promises outcomes; public cases remain functionally safe
-- Risks: regex misses unsafe phrasing
-- Mitigation: combine keyword patterns with small allow/deny phrase lists derived from sample pack and docs
-- Estimated time: 25 minutes
+### Milestone 4: Transaction Evidence Service with Sharding, Replication, and Cache
+- Goal: provide fast transaction lookup and evidence features at high volume.
+- Why: transaction data is the largest and hottest data source during complaint surges.
+- Business value: faster evidence matching and lower load on the source ledger.
+- Components: transaction lookup API, recent transaction cache, read-optimized indexes, duplicate-payment query, established-recipient query.
+- Database choice: sharded PostgreSQL/Citus, CockroachDB/YugabyteDB, or DynamoDB-style partitioned store for transaction metadata.
+- Sharding strategy: shard by `account_id` or customer wallet id; secondary indexes by transaction id and timestamp.
+- Replication strategy: primary per shard with read replicas; async replicas for scale; strict primary read when freshness is required.
+- Cache choice: Redis cache-aside for recent transactions, transaction id lookups, and hot customer histories.
+- Data movement strategy: pass transaction references and compact evidence features, not full transaction histories, between services.
+- Endpoints: `GET /transactions/{transaction_id}`, `GET /accounts/{account_id}/transactions`, `POST /evidence/features`.
+- Testing strategy: hot-account load tests, cache hit/miss tests, replica-lag tests, shard-routing tests.
+- Acceptance criteria: service returns evidence features within latency budget and handles missing/stale data explicitly.
+- Risks: cross-shard queries are expensive.
+- Mitigation: avoid global scans, precompute read models, route by account/customer shard key.
 
-### Milestone 5: LLM-Assisted NLG and Multilingual Upgrade
-- Goal: improve quality of summaries/replies and handle Bangla/mixed extraction gaps without risking structured correctness
-- Why: supports manual-review score and multilingual edge cases
-- Business value: better agent usability and customer-facing tone
-- Components: one primary LLM client, optional secondary fallback if time permits, structured NLG prompt, optional Bangla/mixed extraction assist, circuit-breaker or fast failure counter, template fallback path
-- Files involved: LLM client, prompt builder, circuit breaker, NLG orchestrator
-- Dependencies: milestones 3-4
-- Deliverables: production path where rules compute facts and LLM only verbalizes them
-- Testing strategy: run sample pack with and without LLM keys; verify English agent summary; Bangla customer reply; safe fallback when LLM unavailable
-- Acceptance criteria: service remains correct without LLM; with LLM, replies improve but structured fields never change ownership
-- Risks: timeout, rate limit, malformed LLM JSON
-- Mitigation: hard timeout, narrow output contract, immediate template fallback, never trust LLM on transaction ID or routing
-- Estimated time: 40 minutes
+### Milestone 5: Investigation Service and Deterministic Rule Engine
+- Goal: produce structured investigation decisions without LLM dependency.
+- Why: evidence reasoning, routing, and escalation must remain deterministic and auditable.
+- Business value: protects correctness for financial support decisions.
+- Components: normalization, Bangla numeral handling, intent extraction, transaction matcher, verdict engine, classifier, severity/department router, human-review decision engine.
+- Database choice: PostgreSQL for versioned rule configuration and reason-code taxonomy; Redis for active ruleset cache.
+- CAP choice: prefer consistency for active rule version reads; fall back to last-known-good ruleset if config DB is unavailable.
+- Scaling design: stateless investigation replicas behind internal load balancer.
+- Endpoints: `POST /investigations/evaluate`, `GET /rules/active-version`.
+- Deliverables: structured decision object with rule version, confidence/reason codes, and evidence references.
+- Testing strategy: public samples, ambiguity tests, no-match tests, duplicate-payment tests, phishing override tests, Bangla numeral tests.
+- Acceptance criteria: structured fields are rule-owned and deterministic across replicas.
+- Risks: stale rule cache causes inconsistent outputs.
+- Mitigation: ruleset versioning, cache TTL, forced invalidation events, response includes rule version.
 
-### Milestone 6: End-to-End Hardening and Deployment
-- Goal: make the service judgeable, reproducible, and stable
-- Why: a correct local service that is unreachable scores poorly
-- Business value: converts implementation into a valid submission
-- Components: Dockerfile, env handling, external deployment, sample output artifact, README/runbook
-- Files involved: Dockerfile, dependency file, README, `.env.example`, sample output, optional runbook
-- Dependencies: milestones 1-5
-- Deliverables: public endpoint or Docker fallback, complete documentation
-- Testing strategy: cold start health test, all sample cases against deployed instance, malformed input smoke tests, image-size check
-- Acceptance criteria: public `/health` and `/analyze-ticket` reachable; startup <60s; image <1GB; README complete
-- Risks: deployment instability, oversized image, secret leakage
-- Mitigation: slim base image, env vars only, no heavyweight infra, final repository secret sweep
-- Estimated time: 35 minutes
+### Milestone 6: NLG and Safety Service
+- Goal: generate safe agent summaries, recommended next actions, and customer replies.
+- Why: response text must be helpful without promising unauthorized outcomes or asking for secrets.
+- Business value: agents get usable language while safety remains enforced in code.
+- Components: LLM client, template fallback, Bangla/English templates, safety scanner, unsafe-output replacement, provider circuit breaker.
+- Database choice: PostgreSQL for prompt versions, template versions, and safety policy versions.
+- Cache choice: Redis for provider circuit state and hot templates.
+- Scaling design: separate NLG replicas because LLM latency differs from rule-engine latency.
+- Endpoints: `POST /nlg/draft`, `POST /safety/validate`.
+- Queue option: async `DraftRequested` and `DraftCompleted` events for slower enriched replies.
+- Testing strategy: prompt injection tests, OTP/PIN request tests, refund-promise tests, LLM timeout tests.
+- Acceptance criteria: unsafe generated text is replaced before final response or event commit.
+- Risks: LLM latency slows synchronous API.
+- Mitigation: strict deadline, template fallback, circuit breaker, async enrichment path.
 
-### Milestone 7: Submission Lock and Final Verification
-- Goal: freeze a clean, runnable, high-scoring submission
-- Why: final minutes should reduce risk, not add features
-- Business value: preserves working state before deadline
-- Components: final test matrix, submission form completion, fallback readiness
-- Files involved: none new beyond docs/submission artifacts
-- Dependencies: milestone 6
-- Deliverables: validated endpoint, submission answers, final sample output, checklist signoff
-- Testing strategy: re-run core samples, safety prompts, one Bangla case, one malformed request, one no-history case
-- Acceptance criteria: no blocking regressions; all must-have checks pass
-- Risks: late-stage breakage from “one more improvement”
-- Mitigation: code freeze after verification, only blocker fixes
-- Estimated time: 15 minutes
+### Milestone 7: Case Orchestration and Distributed Transaction API
+- Goal: coordinate ticket intake, evidence lookup, investigation, NLG/safety, audit, and routing as one reliable workflow.
+- Why: there is no single database transaction across services.
+- Business value: cases are not half-created or silently lost when one service fails.
+- Pattern: Saga orchestration with idempotent steps and compensating actions.
+- Database choice: PostgreSQL for workflow state and step attempts.
+- Message queue: Kafka/RabbitMQ topics for workflow events and retries.
+- Distributed transaction endpoints:
+  - `POST /workflows/analyze-ticket/start`
+  - `POST /workflows/{case_id}/steps/evidence-complete`
+  - `POST /workflows/{case_id}/steps/investigation-complete`
+  - `POST /workflows/{case_id}/steps/nlg-complete`
+  - `POST /workflows/{case_id}/compensate`
+  - `GET /workflows/{case_id}`
+- Consistency design: final case status is eventually consistent; workflow state is the source of truth for progress.
+- Deliverables: Saga state machine, retry policies, dead-letter queue, compensation behavior, idempotent step APIs.
+- Testing strategy: kill downstream service mid-workflow, duplicate events, out-of-order events, retry exhaustion, compensation tests.
+- Acceptance criteria: workflow reaches completed, failed, or manual-review state without duplicate side effects.
+- Risks: distributed workflow complexity.
+- Mitigation: make steps idempotent, use status transitions, store event ids, define clear terminal states.
+
+### Milestone 8: Message Queue, Pub/Sub, Audit, and Department Routing
+- Goal: move non-blocking work off the synchronous request path.
+- Why: audit, notifications, analytics, and department routing should not slow the agent response.
+- Business value: high responsiveness during campaign traffic.
+- Components: Kafka/RabbitMQ, topics/exchanges, consumers, outbox publishers, dead-letter queues, audit writer, department routing consumers.
+- Database choice: Kafka as event log; ClickHouse/OpenSearch for searchable audit and operational analytics; object storage for long-term archive.
+- Topics/events: `TicketAnalysisRequested`, `EvidenceCollected`, `InvestigationCompleted`, `SafetyValidated`, `CaseRouted`, `AuditRecorded`, `WorkflowFailed`.
+- Scaling design: partition topics by `case_id` or tenant; scale consumers by consumer group.
+- Testing strategy: event replay, duplicate event handling, consumer lag, dead-letter processing.
+- Acceptance criteria: all decisions are auditable and route events survive service restarts.
+- Risks: queue lag during traffic spikes.
+- Mitigation: partitioning, autoscaled consumers, backpressure, prioritized fraud/safety topics.
+
+### Milestone 9: Performance, Load Balancing, and Database Scaling
+- Goal: prove the system handles high concurrency and large data volume.
+- Why: campaign surges are the central operational challenge.
+- Business value: support agents receive fast responses instead of waiting behind overloaded services.
+- Components: external load balancer, internal service load balancing, autoscaling policies, DB connection pooling, read replicas, shard routing, cache warming, CDN only for static docs if needed.
+- Database scaling:
+  - Auth: primary plus read replica.
+  - Tickets: primary plus read replicas, partition by creation date/tenant.
+  - Transactions: shard by account/customer id, replicate each shard.
+  - Audit: append-only event log plus analytics store.
+  - Rules/templates: primary plus cache, low write volume.
+- Testing strategy: load tests for `POST /analyze-ticket`, hot account tests, queue backpressure tests, cache stampede tests, replica failover tests.
+- Acceptance criteria: p95 latency target is met, error rate stays within budget, no database connection exhaustion.
+- Risks: bottleneck shifts to evidence or NLG service.
+- Mitigation: bulkheads, per-service autoscaling, NLG fallback, evidence cache, queue-based smoothing.
+
+### Milestone 10: Observability, Deployment, and Final Verification
+- Goal: deploy a multi-service system that can be operated and debugged.
+- Why: distributed systems fail in partial ways and require visibility.
+- Business value: faster incident response and safer production operation.
+- Components: Docker Compose for local multi-service setup, Kubernetes or VM-based multi-server deployment, Prometheus metrics, Grafana dashboards, OpenTelemetry traces, centralized logs, health/readiness checks.
+- Deployment design: gateway on public nodes; internal services on private network; databases managed or dedicated; queues replicated; secrets in environment/secret manager.
+- Testing strategy: end-to-end smoke tests, service restart tests, failover tests, secret sweep, JWT validation, safety regression, sample-case parity.
+- Acceptance criteria: public gateway is reachable, internal services are healthy, traces show cross-service request flow, dashboards expose latency/error/queue metrics.
+- Risks: operational complexity.
+- Mitigation: start with Docker Compose, then move to staged deployment; document runbooks and rollback steps.
 
 ---
 
 ## 5. Dependency Graph
 
 ```text
-Milestone 1: Service Skeleton
+Milestone 1: API Gateway / Proxy
         |
         v
-Milestone 2: Normalization and Parsing
+Milestone 2: Auth / JWT / Rate Limiting
         |
         v
-Milestone 3: Core Investigation Rule Engine
+Milestone 3: Ticket Intake Write Model
         |
-        +----------------------+
-        |                      |
-        v                      v
-Milestone 4: Safety +         Milestone 5: LLM NLG Upgrade
-Template Fallback              |
-        |                      |
-        +----------+-----------+
-                   |
-                   v
-        Milestone 6: Deployment and Docs
-                   |
-                   v
-        Milestone 7: Submission Lock
+        +-------------------------+
+        |                         |
+        v                         v
+Milestone 4: Transaction       Milestone 6: NLG + Safety
+Evidence Service                    ^
+        |                            |
+        v                            |
+Milestone 5: Investigation Rules ----+
+        |
+        v
+Milestone 7: Saga Orchestration
+        |
+        v
+Milestone 8: Pub/Sub + Audit + Routing
+        |
+        v
+Milestone 9: Performance + DB Scaling
+        |
+        v
+Milestone 10: Observability + Deployment
 ```
 
-Critical logic dependency graph:
+Critical request path:
 
 ```text
-Schema/Enums
+Client
   |
   v
-Input Validation
+Load Balancer
   |
   v
-Normalization + Language Detection
+API Gateway / Proxy / Rate Limit / JWT Validation
   |
   v
-Intent Extraction
+Ticket Intake Service
   |
   v
-Transaction Matching
+Case Orchestrator
+  |
+  +--> Transaction Evidence Service --> Sharded Transaction DB + Redis
+  |
+  +--> Investigation Service ---------> Rules DB + Redis
+  |
+  +--> NLG and Safety Service --------> LLM/Templates + Safety DB
+  |
+  +--> Audit/Event Stream ------------> Kafka/RabbitMQ + Audit Store
   |
   v
-Evidence Verdict
+Response Validation
   |
   v
-Case Classification
-  |
-  v
-Severity + Department + Human Review
-  |
-  +--> Template Text
-  |
-  +--> LLM NLG
-          |
-          v
-     Safety Enforcement
-          |
-          v
-   Response Validation
-          |
-          v
-      Deployment
+Client
 ```
 
 ---
@@ -354,103 +348,122 @@ Severity + Department + Human Review
 ## 6. Critical Path
 
 ### MUST HAVE
-- Milestones 1, 2, 3, 4, 6, 7
-- Why: they cover scoreability, core evidence score, safety score, and deployment score
+- Gateway/proxy with stable public API.
+- Auth service with JWT generation and validation.
+- Rate limiting at the gateway.
+- Ticket intake service with idempotent write model.
+- Investigation service with deterministic structured decisions.
+- Transaction evidence service with clear database ownership.
+- Safety/NLG service with fallback templates.
+- Message queue for audit and routing.
+- Basic Saga workflow for distributed transaction handling.
 
 ### SHOULD HAVE
-- Milestone 5 with at least one primary LLM and template fallback
-- Why: helps Bangla/mixed nuance and manual response-quality review, but service must remain competitive without it
+- Read replicas for ticket and auth queries.
+- Redis cache for recent transactions, rules, templates, and rate limits.
+- Outbox pattern for reliable event publication.
+- Dead-letter queues and retry policies.
+- Service-level health/readiness checks.
+- OpenTelemetry tracing across gateway and services.
 
 ### NICE TO HAVE
-- secondary LLM provider
-- confidence and richer reason_codes
-- lightweight request correlation logging
-- idempotency cache
-- formal merchant tone tuning beyond baseline
-- Why: useful but not worth risking core path
+- Full transaction sharding implementation.
+- Multi-region replication.
+- Advanced autoscaling by queue lag.
+- Blue-green or canary deployment.
+- Searchable audit dashboards.
+- Read model projections for agent dashboards.
 
-### Hackathon Simplification Decisions
-Implement now:
-- one container
-- one API process
-- deterministic tables/rules
-- template fallback
-Simplify:
-- `/health` checks only app readiness
-- logging to stdout JSON or plain structured logs
-- in-process circuit-breaker state
-Postpone:
-- Redis, Postgres, Kafka, NGINX, k8s, observability stack, distributed rate limits
+### CAP and Consistency Rules
+- Strong consistency for auth, ticket creation, final decision writes, and audit event persistence.
+- Eventual consistency for department routing, notifications, analytics, and read replicas.
+- Bounded staleness for transaction evidence reads; force primary read when a fresh transaction id is explicitly referenced.
+- Availability-first behavior for NLG: return safe template fallback if LLM or provider is unavailable.
 
 ---
 
 ## 7. Engineering Task Breakdown
 
-### Engineer A: API / Platform / Deployment Lead
-- Build app skeleton, schemas, enums, error handling, config
-- Own `/health`, `/analyze-ticket`, output validation
-- Own Dockerfile, deployment, README/runbook, `.env.example`
-- Merge points: after milestone 1 for route integration, after milestone 6 for deployment freeze
+### Engineer A: Gateway / Auth / Platform Lead
+- Build API gateway, proxy routing, JWT validation, rate limits, correlation IDs.
+- Build Auth Service endpoints and token lifecycle.
+- Own load balancer config, service discovery, deployment topology, and external contract.
 
-### Engineer B: Investigation Logic Lead
-- Build normalization, extraction, transaction matcher, evidence verdict
-- Build classifier, severity, department, human review, confidence/reason codes
-- Own sample-case parity for structured fields
-- Merge points: integrates into route after milestone 3
+### Engineer B: Ticket / Workflow / Distributed Transaction Lead
+- Build Ticket Intake Service, idempotency, ticket database schema, read/write separation.
+- Build Case Orchestration Service with Saga workflow state.
+- Own outbox pattern, workflow retries, compensation endpoints, and workflow status APIs.
 
-### Engineer C: AI / Safety / QA Lead
-- Build safety enforcer and template fallback first
-- Then add LLM client, prompt builder, fallback orchestration, merchant/Bangla tone handling
-- Own adversarial tests, Bangla checks, public sample verification harness
-- Merge points: safety joins after milestone 4, LLM joins after milestone 5
+### Engineer C: Evidence / Rules Lead
+- Build Transaction Evidence Service, transaction cache, shard-routing design, read models.
+- Build Investigation Service, deterministic rule engine, Bangla normalization, classification, severity, routing decision.
+- Own CAP decisions for evidence freshness and rule consistency.
+
+### Engineer D: AI / Safety / Messaging / Observability Lead
+- Build NLG and Safety Service with template fallback and LLM circuit breaker.
+- Build Kafka/RabbitMQ topics, audit consumers, department routing consumers, dead-letter queues.
+- Own traces, logs, metrics, dashboards, and safety regression tests.
 
 ### Parallelization Plan
-- A and B start immediately after document alignment.
-- C starts with safety templates and test harness while B builds rules.
-- A integrates B’s structured engine first, then C’s safety layer, then C’s LLM path.
-- Final integration order: contract -> rules -> safety -> LLM -> deployment.
+- A starts gateway/auth while B starts ticket intake and workflow schema.
+- C starts evidence/rule services using local mock APIs until gateway routing is ready.
+- D starts safety templates and queue/audit contracts.
+- Integration order: gateway -> auth -> ticket intake -> evidence -> investigation -> safety/NLG -> orchestration -> pub/sub -> observability -> scaling tests.
 
 ---
 
-## 8. Hackathon Time Allocation
+## 8. Time Allocation
 
-- 0:00-0:20 setup, schema, skeleton, role split
-- 0:20-0:50 normalization and validation hardening
-- 0:50-2:00 core rule engine and public sample parity
-- 2:00-2:25 safety layer and template fallback
-- 2:25-3:05 LLM integration only if core path is stable
-- 3:05-3:40 Docker, deployment, external smoke tests
-- 3:40-4:10 README, sample output, runbook, submission text
-- 4:10-4:30 freeze, re-test, submit
+### Architecture-Complete Build Order
+- 0:00-0:30 confirm service boundaries, data ownership, event contracts, and endpoint contracts.
+- 0:30-1:30 gateway, auth, JWT, rate limiting, and local service discovery.
+- 1:30-2:30 ticket intake service, PostgreSQL schema, idempotency, outbox.
+- 2:30-3:45 transaction evidence service, cache, shard key design, read/write model.
+- 3:45-5:00 investigation service and deterministic rule engine.
+- 5:00-6:00 NLG/safety service with fallback and circuit breaker.
+- 6:00-7:00 Saga orchestrator and distributed transaction endpoints.
+- 7:00-8:00 Kafka/RabbitMQ topics, audit writer, department routing consumers.
+- 8:00-9:00 load balancing, replicas, DB scaling configuration, cache tuning.
+- 9:00-10:00 observability, end-to-end tests, failure tests, documentation.
 
-Time-budget rule:
-- If milestone 3 slips, milestone 5 is reduced before milestone 4 or 6 are reduced.
-- If deployment slips, fallback to Docker path immediately rather than spending late time on infra debugging.
+### Time-Budget Rule
+- If implementation time is limited, keep the gateway, auth, ticket intake, investigation, safety, and basic queue flow first.
+- If scaling implementation slips, document sharding/replication choices and implement cache/read-replica hooks.
+- If LLM integration slips, keep deterministic templates and safety enforcement.
 
 ---
 
 ## 9. Agent Mode Prompt Sequence
 
 ### Milestone 1 Prompt
-“Read `CLAUDE.md`, then re-read `docs/ground-truth.md`, `docs/QueueStorm_Problem_Analysis.md`, `docs/QueueStorm_Investigator_PRD.md`, and `docs/QueueStorm_Investigator_HLD.md` before changing anything. Implement only the minimum runnable service skeleton for QueueStorm Investigator: exact `GET /health`, exact route for `POST /analyze-ticket`, centralized enums/constants, request/response schemas, config loading, and controlled error handling. Keep the project runnable at all times, follow the HLD modular-monolith direction, avoid architectural drift, and stop to ask if any assumption is required.”
+"Read the source-of-truth docs and implement the API Gateway / proxy boundary for QueueStorm Investigator. Expose `GET /health`, `POST /analyze-ticket`, and `GET /analysis/{case_id}` at the gateway. Add schema validation, correlation IDs, upstream timeout handling, and route forwarding to the Ticket Intake Service. Keep the gateway stateless and free of business logic."
 
 ### Milestone 2 Prompt
-“Read `CLAUDE.md` and re-read the project source-of-truth docs, especially `ground-truth.md` and the API contract sections. Implement input validation and normalization only: malformed JSON handling, missing/invalid field handling, empty complaint handling, `transaction_history: null` coercion, extra-field ignore behavior, language hint handling, and Bangla numeral normalization. Do not break existing endpoints. Keep the service runnable and schema-exact.”
+"Implement Auth Service and gateway security. Add JWT generation, refresh, logout, JWKS endpoint, gateway JWT validation, role claims, and Redis-backed rate limiting. Use PostgreSQL for users/roles/refresh tokens and Redis for denylist/rate-limit counters. Add tests for invalid tokens, expired tokens, revoked tokens, and burst traffic."
 
 ### Milestone 3 Prompt
-“Read `CLAUDE.md`, `ground-truth.md`, the transaction-matching and classification rules in the PRD/HLD, and the public sample cases before editing. Implement the deterministic investigation core only: complaint signal extraction, transaction matching, evidence verdict, duplicate-payment detection, established-recipient inconsistency detection, case classification, severity, department routing, human review, and optional confidence/reason codes. All structured decisions must remain rule-owned, never LLM-owned. Preserve runnability and stop if assumptions are needed.”
+"Implement Ticket Intake Service. Add durable ticket creation, idempotency keys, PostgreSQL primary write model, read-replica query path, outbox table, and `TicketAnalysisRequested` publication. Expose ticket status APIs and ensure duplicate requests do not create duplicate cases."
 
 ### Milestone 4 Prompt
-“Read `CLAUDE.md`, `ground-truth.md`, and the safety sections of the Problem Statement, PRD, and HLD before making changes. Implement the deterministic safety layer and template fallback text generation. Enforce all safety rules after text generation, replace unsafe customer-facing text with safe templates, and ensure no previous milestone behavior regresses. Keep the project runnable and avoid architectural drift.”
+"Implement Transaction Evidence Service. Own transaction lookup APIs, recent transaction cache, shard-key routing design, read replica strategy, duplicate-payment features, and established-recipient features. Avoid moving full histories between services; return compact evidence features and references."
 
 ### Milestone 5 Prompt
-“Read `CLAUDE.md`, `ground-truth.md`, and the AI architecture sections again before editing. Implement LLM-backed NLG only within the approved trust boundary: rules continue to own all structured fields, and the LLM may generate only `agent_summary`, `recommended_next_action`, and `customer_reply`, plus optional multilingual extraction support where rules are insufficient. Add strict prompt isolation, timeouts, and template fallback. Keep the project runnable and stop if any assumption is required.”
+"Implement Investigation Service with deterministic rules only. Add normalization, Bangla numeral parsing, intent extraction, transaction matching, evidence verdict, case classification, severity, department routing, and human review. Use versioned rule configuration and Redis active-rules cache. Do not let the LLM own structured fields."
 
 ### Milestone 6 Prompt
-“Read `CLAUDE.md`, `ground-truth.md`, deployment requirements, the team manual, and rubric before making changes. Implement only the deployment and reproducibility layer needed for hackathon judging: Dockerfile, environment variable wiring, startup command, and documentation artifacts. Do not introduce heavyweight infrastructure that increases risk. Preserve all previous milestone behavior and keep the service externally runnable.”
+"Implement NLG and Safety Service. Generate `agent_summary`, `recommended_next_action`, and `customer_reply` through safe templates first, then optional LLM. Add deterministic post-generation safety validation, unsafe text replacement, prompt/template versioning, Redis circuit state, and timeout fallback."
 
 ### Milestone 7 Prompt
-“Read `CLAUDE.md`, `ground-truth.md`, the rubric, and sample cases before any final edits. Perform final hardening only: fix blocking regressions, verify sample-case parity, verify safety behavior, verify malformed-input handling, and prepare the repository for submission without architectural drift. Do not add speculative features. Keep the project runnable, and stop to ask before making any non-trivial behavioral change.”
+"Implement Case Orchestration Service using Saga orchestration. Add workflow state storage, idempotent step endpoints, retry policy, compensation endpoint, dead-letter handling, and status transitions. Ensure cross-service workflow failures end in completed, failed, or manual-review states without duplicate side effects."
+
+### Milestone 8 Prompt
+"Implement pub/sub integration for audit and department routing. Add Kafka/RabbitMQ topics, consumers, outbox publishers, audit storage, route events, dead-letter queues, and replay-safe event handlers. Every emitted event must include case id, correlation id, event id, timestamp, and schema version."
+
+### Milestone 9 Prompt
+"Implement performance and scaling configuration. Add load balancer setup, multiple service replicas, DB connection pooling, read/write separation, transaction shard routing, Redis cache policies, backpressure handling, and load tests for high-concurrency `POST /analyze-ticket` traffic."
+
+### Milestone 10 Prompt
+"Implement observability and final deployment. Add Docker Compose or Kubernetes manifests, service health/readiness probes, Prometheus metrics, Grafana dashboards, OpenTelemetry traces, centralized logs, secret management notes, and end-to-end failure tests."
 
 ---
 
@@ -458,42 +471,49 @@ Time-budget rule:
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---:|---|
-| Schema mismatch | Medium | High | Central enums, response-model validation, early sample-case tests |
-| Ambiguous transaction misclassified as clear match | Medium | High | Prefer `insufficient_data`, explicit ambiguity thresholds |
-| Unsafe reply text | Medium | Critical | Deterministic post-NLG safety gate with replacement templates |
-| LLM timeout/rate limit | High | Medium | Template fallback, hard timeouts, minimal provider dependence |
-| Bangla extraction weakness | Medium | High | Bangla numeral normalization first, LLM assist only for complex multilingual cases |
-| Overengineered infra slows delivery | High | High | Single-service deployment only, postpone Redis/DB/k8s |
-| Health endpoint blocked by optional dependencies | Medium | High | App-only health readiness |
-| Late deployment failure | Medium | High | Choose simplest hosting path, keep Docker fallback ready |
-| Hidden prompt injection case | High | High | prompt isolation + output safety enforcement |
-| Merchant-tone/manual-review polish underdeveloped | Medium | Medium | Add explicit merchant templates and formal reply style |
+| Gateway bottleneck | Medium | High | Horizontal gateway replicas, external load balancer, lightweight proxy logic |
+| Auth/rate-limit Redis outage | Medium | High | Redis cluster, local emergency limits, clear fail-open/fail-closed policy |
+| Database primary overload | High | High | Read replicas, partitioning, connection pooling, write batching |
+| Transaction data too large to move | High | High | Evidence feature API, shard-local queries, cache-aside recent history |
+| Cross-service latency | High | High | Narrow sync path, deadlines, async audit/routing, circuit breakers |
+| Eventual consistency confusion | Medium | Medium | Explicit workflow states, read-your-write fallback, UI/status messaging |
+| Distributed transaction partial failure | Medium | Critical | Saga orchestration, idempotency, outbox, compensation endpoints |
+| Queue lag during campaign surge | Medium | High | Topic partitioning, autoscaled consumers, backpressure, priority queues |
+| Cache stale data | Medium | High | TTLs, versioned rules/templates, forced invalidation, primary-read escape hatch |
+| Unsafe generated reply | Medium | Critical | Deterministic safety service, replacement templates, regression tests |
+| JWT misconfiguration | Medium | Critical | JWKS rotation tests, strict validation, short-lived access tokens |
+| Shard hot spot | Medium | High | shard by account/customer id, monitor hot keys, split hot shards |
 
 ---
 
 ## 11. Pre-Coding Checklist
 
-- [ ] `CLAUDE.md` read completely
-- [ ] Documentation read in required priority order
-- [ ] Ground-truth conflicts resolved in favor of `ground-truth.md`
-- [ ] Exact API schema and enum values locked
-- [ ] Public sample cases analyzed for reasoning patterns
-- [ ] Evaluation rubric translated into build priority
-- [ ] Safety rules translated into deterministic checks
-- [ ] Rule engine ownership boundary agreed
-- [ ] LLM trust boundary agreed
-- [ ] Bangla numeral and language-handling strategy agreed
-- [ ] Heavy infra explicitly deferred for preliminary round
-- [ ] Deployment target selected
-- [ ] Docker fallback path selected
-- [ ] Environment variable list prepared
-- [ ] Milestone owners assigned across 3 engineers
-- [ ] Freeze rule agreed: no speculative features after deployment starts
+- [ ] Service boundaries and owners agreed.
+- [ ] API Gateway contract locked.
+- [ ] Auth/JWT flow and roles defined.
+- [ ] Rate-limit policy defined by user/IP/role.
+- [ ] Database-per-service ownership agreed.
+- [ ] Read/write separation strategy defined.
+- [ ] Transaction shard key selected.
+- [ ] Replication strategy selected for each database.
+- [ ] Cache keys, TTLs, and invalidation policy defined.
+- [ ] Queue technology selected: Kafka or RabbitMQ.
+- [ ] Event schemas and schema versions defined.
+- [ ] Saga workflow states and compensation behavior defined.
+- [ ] CAP tradeoffs documented per service.
+- [ ] Safety rules translated into deterministic checks.
+- [ ] LLM trust boundary agreed.
+- [ ] Load balancer and deployment topology selected.
+- [ ] Observability plan selected: logs, metrics, traces.
+- [ ] Failure-mode tests listed.
+- [ ] Secret management and JWT key rotation plan prepared.
 
 ## Assumptions and Defaults Chosen
-- High-value threshold for mandatory human review: use `>= 10,000 BDT` from `ground-truth.md`.
-- Complaint-local time references are interpreted in Bangladesh Standard Time and compared against UTC transaction timestamps.
-- `reason_codes` remain optional and may use concise descriptive strings rather than a rigid taxonomy.
-- `confidence` is optional and deterministic; omit rather than guess if implementation time is constrained.
-- Health check returns application readiness and does not fail because optional infra is absent.
-- Production-grade components named in the HLD are preserved as future architecture, not preliminary-round scope.
+- PostgreSQL is the default relational database for auth, ticket, workflow, rule, and NLG metadata.
+- Transaction data uses sharded PostgreSQL/Citus, CockroachDB/YugabyteDB, or another horizontally scalable store depending on available infrastructure.
+- Redis is used for rate limits, hot transaction cache, rule/template cache, and circuit-breaker state.
+- Kafka is preferred for high-throughput event streaming; RabbitMQ is acceptable for simpler queue-based routing.
+- Synchronous APIs return the safest available analysis quickly; non-critical audit, notification, and analytics work runs asynchronously.
+- Strong consistency is required for auth, ticket creation, final decision records, and audit persistence.
+- Eventual consistency is acceptable for department notifications, analytics, dashboards, and read replicas.
+- Distributed transactions use Saga plus outbox rather than two-phase commit.

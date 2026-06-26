@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: queuestorm-gateway
+  namespace: queuestorm
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: queuestorm-gateway
+  template:
+    metadata:
+      labels:
+        app: queuestorm-gateway
+    spec:
+      containers:
+        - name: api
+          image: queuestorm-investigator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: queuestorm-config
+          env:
+            - name: AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: queuestorm-secrets
+                  key: auth-jwt-secret
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: queuestorm-secrets
+                  key: anthropic-api-key
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
