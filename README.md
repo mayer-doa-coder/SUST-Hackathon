@@ -2,6 +2,99 @@
 
 AI-powered support copilot for digital financial services platforms. Investigates customer complaints against transaction history and returns evidence-backed routing decisions in real-time.
 
+[![CI](https://github.com/dipshekhor/SUST-Hackathon/actions/workflows/ci.yml/badge.svg)](https://github.com/dipshekhor/SUST-Hackathon/actions/workflows/ci.yml)
+
+---
+
+## Live Deployment
+
+| | URL |
+|---|---|
+| **Base URL** | https://sust-hackathon-production-9bd0.up.railway.app |
+| **Health Check** | https://sust-hackathon-production-9bd0.up.railway.app/health |
+| **Analyze Endpoint** | https://sust-hackathon-production-9bd0.up.railway.app/analyze-ticket |
+| **GitHub Repo** | https://github.com/dipshekhor/SUST-Hackathon |
+
+---
+
+## Quick Test (Judge Verification)
+
+### 1. Health Check
+Open in browser or run:
+```bash
+curl https://sust-hackathon-production-9bd0.up.railway.app/health
+```
+**Expected response:**
+```json
+{"status": "ok"}
+```
+
+---
+
+### 2. Test with Sample Case (Wrong Transfer)
+```bash
+curl -X POST https://sust-hackathon-production-9bd0.up.railway.app/analyze-ticket \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ticket_id": "TKT-001",
+    "complaint": "I sent 5000 taka to a wrong number around 2pm today. Please help me get my money back.",
+    "language": "en",
+    "channel": "in_app_chat",
+    "user_type": "customer",
+    "transaction_history": [
+      {
+        "transaction_id": "TXN-9101",
+        "timestamp": "2026-04-14T14:08:22Z",
+        "type": "transfer",
+        "amount": 5000,
+        "counterparty": "+8801719876543",
+        "status": "completed"
+      }
+    ]
+  }'
+```
+**Expected:** `evidence_verdict: consistent`, `case_type: wrong_transfer`, `department: dispute_resolution`
+
+---
+
+### 3. Test with Sample Cases JSON File
+The full sample case pack is in [`docs/SUST_Preli_Sample_Cases.json`](docs/SUST_Preli_Sample_Cases.json).
+
+Each case has an `input` field — POST it to `/analyze-ticket` and verify the response matches the `expected_output` fields.
+
+**Using Postman:**
+1. Open [web.postman.co](https://web.postman.co)
+2. New Request → `POST`
+3. URL: `https://sust-hackathon-production-9bd0.up.railway.app/analyze-ticket`
+4. Body → raw → JSON → paste any `input` from the sample cases file
+5. Click Send
+
+**Using curl (from sample file):**
+```bash
+# Phishing case
+curl -X POST https://sust-hackathon-production-9bd0.up.railway.app/analyze-ticket \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ticket_id": "TKT-010",
+    "complaint": "Someone called pretending to be from the bank and asked for my OTP. I gave it and now 15000 taka is missing.",
+    "language": "en",
+    "channel": "call_center",
+    "user_type": "customer",
+    "transaction_history": []
+  }'
+```
+**Expected:** `case_type: phishing_or_social_engineering`, `severity: critical`, `department: fraud_risk`
+
+---
+
+### 4. Validation Error Test
+```bash
+curl -X POST https://sust-hackathon-production-9bd0.up.railway.app/analyze-ticket \
+  -H "Content-Type: application/json" \
+  -d '{"ticket_id": "", "complaint": "test"}'
+```
+**Expected:** `{"error": {"code": "INVALID_FIELD_TYPE", ...}}`
+
 ---
 
 ## Overview
